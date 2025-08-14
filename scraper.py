@@ -14,6 +14,77 @@ class ProductScraper:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
+
+import requests
+from bs4 import BeautifulSoup
+from utils import (
+    is_out_of_stock,
+    format_price,
+    clean_text
+)
+
+class ProductScraper:
+    def __init__(self):
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+
+    def scrape_product(self, url):
+        try:
+            response = requests.get(url, headers=self.headers)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, 'html.parser')
+
+            # Determine which site to scrape
+            if 'flipkart' in url.lower():
+                return self._scrape_flipkart(soup)
+            elif 'amazon' in url.lower():
+                return self._scrape_amazon(soup)
+            else:
+                return {"error": "Unsupported website"}
+
+        except Exception as e:
+            return {"error": f"Scraping failed: {str(e)}"}
+
+    def _scrape_flipkart(self, soup):
+        # Flipkart specific selectors
+        title_elem = soup.find('span', {'class': 'B_NuCI'})
+        price_elem = soup.find('div', {'class': '_30jeq3 _16Jk6d'})
+        image_elem = soup.find('img', {'class': '_396cs4 _2amPTt _3qGmMb'})
+        
+        title = title_elem.get_text().strip() if title_elem else "Title not found"
+        price = price_elem.get_text().strip() if price_elem else "Price not found"
+        image_url = image_elem.get('src') if image_elem else ""
+        
+        # Check stock status
+        out_of_stock = is_out_of_stock(soup)
+        
+        return {
+            'title': title,
+            'price': format_price(price),
+            'image_url': image_url,
+            'out_of_stock': out_of_stock
+        }
+
+    def _scrape_amazon(self, soup):
+        # Amazon specific selectors
+        title_elem = soup.find('span', {'id': 'productTitle'})
+        price_elem = soup.find('span', {'class': 'a-price-whole'})
+        image_elem = soup.find('img', {'id': 'landingImage'})
+        
+        title = title_elem.get_text().strip() if title_elem else "Title not found"
+        price = price_elem.get_text().strip() if price_elem else "Price not found"
+        image_url = image_elem.get('src') if image_elem else ""
+        
+        # Check stock status
+        out_of_stock = is_out_of_stock(soup)
+        
+        return {
+            'title': title,
+            'price': format_price(price),
+            'image_url': image_url,
+            'out_of_stock': out_of_stock
+    }
     
     def scrape_product(self, url, message_text=""):
         """Main scraping function"""

@@ -3,6 +3,65 @@ import requests
 from urllib.parse import urlparse, parse_qs, urlunparse
 from config import SUPPORTED_SHORTENERS, GENDER_KEYWORDS
 
+def is_out_of_stock(soup):
+    """
+    Check if a product is out of stock based on the parsed HTML soup
+    """
+    # Common indicators of out of stock status
+    out_of_stock_indicators = [
+        'out of stock',
+        'out of Stock',
+        'sold out',
+        'Sold Out',
+        'unavailable',
+        'not available',
+        'currently unavailable'
+    ]
+    
+    # Look for stock status in common locations
+    stock_elements = soup.find_all(['div', 'span', 'p'], class_=lambda x: x and any(keyword in x.lower() for keyword in ['stock', 'availability', 'status']))
+    
+    for element in stock_elements:
+        text = element.get_text().strip()
+        if any(indicator in text for indicator in out_of_stock_indicators):
+            return True
+    
+    # Check for specific out of stock classes
+    out_of_stock_elements = soup.find_all(class_=lambda x: x and any(keyword in x.lower() for keyword in ['out-of-stock', 'outofstock', 'sold-out', 'soldout']))
+    
+    if out_of_stock_elements:
+        return True
+    
+    return False
+
+def format_price(price_str):
+    """Format price string to extract numeric value"""
+    if not price_str:
+        return None
+    
+    # Remove currency symbols and extra characters
+    import re
+    price_clean = re.sub(r'[^\d.,]', '', price_str)
+    
+    # Handle different decimal separators
+    if ',' in price_clean and '.' in price_clean:
+        # Both comma and dot present, assume comma is thousand separator
+        price_clean = price_clean.replace(',', '')
+    elif ',' in price_clean:
+        # Only comma, assume it's decimal separator for some locales
+        price_clean = price_clean.replace(',', '.')
+    
+    try:
+        return float(price_clean)
+    except ValueError:
+        return None
+
+def clean_text(text):
+    """Clean and normalize text"""
+    if not text:
+        return ""
+    return text.strip().replace('\n', ' ').replace('\r', ' ')
+
 def is_supported_platform(url):
     """Check if URL is from a supported e-commerce platform"""
     parsed = urlparse(url)

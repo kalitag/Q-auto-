@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# main.py - ReviewCheckk Bot (Rebuilt with Correct Indentation)
+# main.py - ReviewCheckk Bot (Corrected Syntax)
 
 """
-REVIEWCHECKK BOT - REBUILT VERSION
+REVIEWCHECKK BOT - CORRECTED VERSION
 Follows 99+ Rules | Resource-Conscious | Includes OCR Fallback
 """
 
@@ -107,6 +107,405 @@ def get_platform(url):
     return "generic"
 
 def clean_title(title, platform, url):
+    """Rules 23-31: Clean title according to strict formatting rules."""
+    logger.debug(f"Cleaning title: '{title}' for platform: {platform}")
+    if not title:
+        return "Product"
+    # Basic cleanup
+    title = title.encode('ascii', 'ignore').decode('unicode_escape').strip()
+    title = re.sub(r'\\[uU][0-9a-fA-F]{4}', '', title)
+    title = re.sub(r'[^\w\s\-\'\.]', ' ', title)
+    title = re.sub(r'\s+', ' ', title).strip()
+    
+    words = title.split()
+    if not words:
+        return "Product"
+    
+    # Rule 24: First word must be brand (assume first word is brand)
+    brand = words[0].title()
+    rest_title = ' '.join(words[1:8]) # Rule 28: 5-8 words max
+
+    # Rule 29: Clothing must include gender
+    # Use provided Myntra categories and common keywords
+    is_clothing_keywords = [
+        'shirt', 't-shirt', 'jeans', 'trousers', 'shorts', 'kurti', 'saree', 'dress',
+        'top', 'skirt', 'jacket', 'blazer', 'coat', 'suit', 'sweater', 'sweatshirt',
+        'ethnic', 'western', 'lingerie', 'nightwear', 'innerwear', 'footwear', 'shoe',
+        'sandal', 'flip flop', 'heel', 'flat', 'boot', 'sneaker'
+    ]
+    is_clothing = any(kw in url.lower() or kw in title.lower() for kw in is_clothing_keywords)
+    # Also check Myntra categories from the provided data
+    myntra_clothing_categories = [
+        'Topwear', 'Bottomwear', 'Innerwear', 'Footwear', 'Indian & Fusion Wear',
+        'Western Wear', 'Lingerie', 'Nightwear', 'Loungewear', 'Ethnic Wear',
+        'Casual Shoes', 'Sports Shoes', 'Formal Shoes', 'Flats', 'Heels', 'Boots',
+        'Sandals', 'Flip Flops'
+    ]
+    is_clothing = is_clothing or any(cat.lower() in title.lower() for cat in myntra_clothing_categories)
+
+    gender = ""
+    if is_clothing:
+        if re.search(r'\b(women|ladies|female|girl|women\'s)\b', title, re.IGNORECASE):
+            gender = "Women"
+        elif re.search(r'\b(men|gentlemen|male|boy|men\'s)\b', title, re.IGNORECASE):
+            gender = "Men"
+        elif re.search(r'\b(kids|children|baby|kid\'s)\b', title, re.IGNORECASE):
+            gender = "Kids"
+        else:
+            # Default heuristic based on URL or common patterns if not in title
+            if 'women' in url.lower() or 'girl' in url.lower():
+                gender = "Women"
+            elif 'men' in url.lower() or 'boy' in url.lower():
+                gender = "Men"
+            elif 'kids' in url.lower() or 'child' in url.lower():
+                gender = "Kids"
+            else:
+                gender = "Unisex" # Fallback
+
+    # Rule 30: Quantity like Pack of 2, 300ml, 1 Piece
+    quantity = ""
+    qty_match = re.search(r'\b(\d+)\s*(?:piece|pcs|ml|gm|kg|ltr|pack|set)s?\b', title, re.IGNORECASE)
+    if qty_match:
+        unit = qty_match.group(0).split()[-1]
+        quantity = f"{qty_match.group(1)} {unit.title()}"
+
+    # Rebuild title
+    if is_clothing:
+        # [Brand] [Gender] [Quantity] [Product Name]
+        parts = [part for part in [brand, gender, quantity, rest_title] if part]
+        return " ".join(parts)
+    else:
+        # [Brand] [Product Title] from @[price] rs (price added later)
+        parts = [part for part in [brand, quantity, rest_title] if part]
+        return " ".join(parts)
+
+def parse_price(price_str):
+    """Rules 32-39: Parse price string to numeric value."""
+    logger.debug(f"Parsing price: '{price_str}'")
+    if not price_str:
+        return "Price unavailable"
+    # Extract numeric value
+    price_value = re.sub(r'[^\d.]', '', price_str)
+    if not price_value:
+        return "Price unavailable"
+    try:
+        # Return integer part only
+        return f"{float(price_value):.0f}"
+    except ValueError:
+        return "Price unavailable"
+
+def extract_text_from_image(image_bytes):
+    """OCR Fallback for title extraction."""
+    logger.info("Performing OCR on image...")
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        # Convert to grayscale for better OCR
+        grayscale_image = image.convert('L')
+        text = pytesseract.image_to_string(grayscale_image)
+        logger.debug(f"OCR extracted text: {text[:100]}...")
+        return text.strip()
+    except Exception as e:
+        logger.error(f"OCR failed: {e}")
+        return ""
+
+# ========================
+# SCRAPER FUNCTIONS
+# ========================
+
+def scrape_product(url, platform):
+    """Scrape product details using requests and BeautifulSoup."""
+    logger.info(f"Scraping {platform} product: {url}")
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15'
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+    except Exception as e:
+        logger.error(f"Failed to fetch page for {url}: {e}")
+        return None
+
+    title, price, image_url = "Product", "Price unavailable", None
+
+    # --- Platform Specific Scraping ---
+    if platform == "myntra":
+        # Using more generic selectors based on common structure
+        title_elem = soup.find('h1', {'class': lambda x: x and ('pdp' in x and 'title' in x)})
+        name_elem = soup.find('h1', {'class': lambda x: x and ('pdp' in x and 'name' in x)})
+        price_elem = soup.find('span', {'class': lambda x: x and ('pdp' in x and 'price' in x)})
+        
+        # Fallback selectors if specific ones fail
+        if not title_elem: title_elem = soup.find('h1')
+        if not name_elem: name_elem = soup.find('h1')
+        if not price_elem: price_elem = soup.find('span', string=re.compile(r'₹|Rs\.'))
+        
+        if name_elem and title_elem:
+            title = f"{name_elem.get_text(strip=True)} {title_elem.get_text(strip=True)}"
+        elif title_elem:
+            title = title_elem.get_text(strip=True)
+        elif name_elem:
+            title = name_elem.get_text(strip=True)
+            
+        if price_elem:
+            price = price_elem.get_text(strip=True)
+            
+        # Image - harder without JS, look for main product image
+        img_elem = soup.find('img', {'alt': lambda x: x and ('product' in x.lower() or 'image' in x.lower())})
+        if not img_elem:
+             # Fallback: first large image
+            img_candidates = soup.find_all('img')
+            for img in img_candidates:
+                src = img.get('src') or img.get('data-src')
+                if src and ('product' in src or 'media' in src):
+                    img_elem = img
+                    break
+        image_url = img_elem.get('src') or img_elem.get('data-src') if img_elem else None
+
+    elif platform == "meesho":
+        # Meesho structure can vary, use generic selectors
+        title_elem = soup.find('h1') # Often the first h1 is the product title
+        # Price often inside a span with a class containing 'price'
+        price_elem = soup.find('span', string=re.compile(r'₹'))
+        if not price_elem:
+             # Look for spans containing numbers
+            price_candidates = soup.find_all('span')
+            for pc in price_candidates:
+                if re.search(r'\d+', pc.get_text()):
+                    price_elem = pc
+                    break
+        
+        title = title_elem.get_text(strip=True) if title_elem else "Meesho Product"
+        price = price_elem.get_text(strip=True) if price_elem else "Price unavailable"
+        
+        # Image
+        img_elem = soup.find('img', {'alt': lambda x: x and 'product' in x.lower()})
+        if not img_elem:
+            img_elem = soup.find('img') # First image as fallback
+        image_url = img_elem.get('src') if img_elem else None
+
+    elif platform == "amazon":
+        title_elem = soup.find('span', {'id': 'productTitle'})
+        # Amazon price structure can be complex, look for common patterns
+        price_whole = soup.find('span', {'class': 'a-price-whole'})
+        price_symbol = soup.find('span', {'class': 'a-price-symbol'})
+        if price_whole:
+            price = f"{price_symbol.get_text(strip=True) if price_symbol else ''}{price_whole.get_text(strip=True)}"
+        else:
+            # Fallback price search
+            price_elem = soup.find('span', string=re.compile(r'₹|Rs\.'))
+            price = price_elem.get_text(strip=True) if price_elem else "Price unavailable"
+            
+        title = title_elem.get_text(strip=True) if title_elem else "Amazon Product"
+        
+        # Image
+        img_elem = soup.find('img', {'id': 'landingImage'})
+        if not img_elem:
+            img_elem = soup.find('img', {'class': lambda x: x and 'image' in x})
+        image_url = img_elem.get('src') if img_elem else None
+
+    elif platform == "flipkart":
+        # Flipkart dynamic classes, use generic selectors
+        title_elem = soup.find('span', {'class': lambda x: x and 'title' in x.lower()})
+        if not title_elem:
+            title_elem = soup.find('h1') # Fallback
+        price_elem = soup.find('div', {'class': lambda x: x and ('price' in x.lower() or '_30jeq3' in x)}) # Common price class
+        
+        title = title_elem.get_text(strip=True) if title_elem else "Flipkart Product"
+        price = price_elem.get_text(strip=True) if price_elem else "Price unavailable"
+        
+        # Image
+        img_elem = soup.find('img', {'class': lambda x: x and ('image' in x.lower() or '_396cs4' in x)})
+        if not img_elem:
+            img_elem = soup.find('img') # Ultimate fallback
+        image_url = img_elem.get('src') if img_elem else None
+
+    else: # Generic fallback
+        title_elem = soup.find('title') or soup.find('h1')
+        title = title_elem.get_text(strip=True) if title_elem else "Product"
+        # Generic price search
+        price_elem = soup.find(string=re.compile(r'₹|Rs\.|Price'))
+        if price_elem:
+            price_match = re.search(r'[\d,]+\.?\d*', str(price_elem))
+            price = price_match.group() if price_match else "Price unavailable"
+        else:
+            price = "Price unavailable"
+        # Generic image
+        img_elem = soup.find('img')
+        image_url = img_elem.get('src') if img_elem else None
+
+    # Clean and finalize
+    clean_title_str = clean_title(title, platform, url)
+    clean_price = parse_price(price)
+
+    return {
+        'platform': platform,
+        'title': clean_title_str,
+        'price': clean_price,
+        'url': url,
+        'image_url': image_url
+    }
+
+# ========================
+# FORMATTING
+# ========================
+
+def format_output(data, pin=PIN_DEFAULT):
+    """Rules 40-50, 81-85: Format output according to platform-specific rules."""
+    platform = data['platform']
+    title = data['title']
+    price = data['price']
+    url = data['url']
+
+    # Rule 51: Common footer
+    footer = "\n@reviewcheckk"
+
+    if platform == 'meesho':
+        # Rule 41: Meesho format
+        formatted = f"{title} @{price} rs\n{url}"
+        # Rule 45: Add pin code
+        formatted += f"\nPin - {pin}"
+        return formatted + footer
+
+    elif 'clothing' in title.lower() or platform in ['myntra', 'meesho'] or any(g in title for g in ['Men', 'Women', 'Kids']):
+        # Rule 42: Clothing format (non-Meesho) - Heuristic check for gender in title
+        formatted = f"{title} @{price} rs\n{url}"
+        return formatted + footer
+
+    else:
+        # Rule 43: Non-clothing format
+        formatted = f"{title} from @{price} rs\n{url}"
+        return formatted + footer
+
+# ========================
+# COMMAND HANDLERS
+# ========================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"🚀 {BOT_USERNAME} Ready!\n"
+        "Send product links from Amazon, Flipkart, Meesho, Myntra, Ajio, Snapdeal.\n"
+        "Commands: /advancing, /off_advancing, /img"
+    )
+
+async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    command = update.message.text.strip()
+    if command == "/advancing":
+        await update.message.reply_text("✅ Advanced Mode ON (Simulated)")
+    elif command == "/off_advancing":
+        await update.message.reply_text("✅ Advanced Mode OFF (Simulated)")
+
+async def img_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔄 Regenerating image... (Simulated)")
+
+# ========================
+# MESSAGE HANDLER
+# ========================
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    start_time = time.time()
+    # Correctly get text and photo
+    text = update.message.text if update.message.text else update.message.caption if update.message.caption else ""
+    photo = update.message.photo[-1] if update.message.photo else None # Get largest photo
+    
+    urls = re.findall(r'https?://[^\s]+', text)
+    pin_code = PIN_DEFAULT
+    pin_match = re.search(r'(?:pin|code)\s*[:\-]?\s*(\d{6})', text, re.IGNORECASE)
+    if pin_match:
+        pin_code = pin_match.group(1)
+
+    # --- Handle OCR Fallback ---
+    ocr_title = ""
+    if photo and not urls:
+        logger.info("No URL found, attempting OCR...")
+        try:
+            file = await context.bot.get_file(photo.file_id)
+            image_bytes = await file.download_as_bytearray()
+            ocr_title = extract_text_from_image(bytes(image_bytes))
+            if ocr_title:
+                 # Try to find a URL in the OCR text
+                ocr_urls = re.findall(r'https?://[^\s]+', ocr_title)
+                urls.extend(ocr_urls)
+                logger.info(f"Found URLs via OCR: {ocr_urls}")
+                # If OCR text is substantial and no URL found, send it back
+                if not ocr_urls and len(ocr_title) > 50:
+                     await update.message.reply_text(f"📄 OCR Extracted:\n{ocr_title[:300]}...")
+        except Exception as e:
+            logger.error(f"Error during OCR processing: {e}")
+    
+    # --- Main Processing Loop for URLs ---
+    if not urls:
+        # If no URLs were found initially or via OCR, we can't process further
+        # The OCR text (if any) was already sent above
+        return # Exit the handler
+
+    for url in urls:
+        logger.info(f"Processing URL: {url}")
+        clean_url_str = clean_url(url)
+        
+        if not is_supported(clean_url_str):
+            await update.message.reply_text("❌ Unsupported or invalid product link.")
+            continue
+
+        platform = get_platform(clean_url_str)
+        data = scrape_product(clean_url_str, platform)
+
+        if not data:
+            await update.message.reply_text("❌ Unable to extract product info.")
+            continue
+
+        formatted_text = format_output(data, pin_code)
+        
+        # --- Handle Image Sending ---
+        media_sent = False
+        if data.get('image_url'):
+            try:
+                img_response = requests.get(data['image_url'], timeout=10)
+                img_response.raise_for_status()
+                image_bytes = img_response.content
+                # Validate it's an image by trying to open it
+                img = Image.open(io.BytesIO(image_bytes))
+                # Send image with caption
+                await update.message.reply_photo(photo=io.BytesIO(image_bytes), caption=formatted_text)
+                media_sent = True
+                logger.info("Product image sent successfully.")
+            except Exception as e:
+                logger.warning(f"Failed to send image from URL: {e}")
+        
+        # Fallback: Send text only if image failed or wasn't found
+        if not media_sent:
+            await update.message.reply_text(formatted_text)
+            logger.info("Sent product info as text.")
+
+    logger.info(f"Processed message in {time.time() - start_time:.2f} seconds.")
+
+# ========================
+# MAIN
+# ========================
+
+def main():
+    if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        logger.critical("BOT_TOKEN is not set in the code. Please update main.py with your actual token.")
+        return
+
+    logger.info("Starting ReviewCheckk Bot...")
+    try:
+        app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
+        
+        # Register handlers
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("advancing", mode_command))
+        app.add_handler(CommandHandler("off_advancing", mode_command))
+        app.add_handler(CommandHandler("img", img_command))
+        app.add_handler(MessageHandler(filters.TEXT | filters.CAPTION | filters.PHOTO, handle_message))
+        
+        logger.info("Bot handlers registered. Starting polling...")
+        app.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        logger.critical(f"Failed to start bot: {e}", exc_info=True)
+
+if __name__ == "__main__":
+    main()def clean_title(title, platform, url):
     """Rules 23-31: Clean title according to strict formatting rules."""
     logger.debug(f"Cleaning title: '{title}' for platform: {platform}")
     if not title:

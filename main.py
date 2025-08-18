@@ -420,7 +420,8 @@ def main():
         logger.critical(f"Failed to start bot: {e}", exc_info=True)
 
 if __name__ == "__main__":
-    main()        
+    main()    
+    
         # If there's a caption, try to extract product info
         if caption:
             # Simple title extraction from caption
